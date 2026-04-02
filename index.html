@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📊 營養數據管理後台 - 個人圖表分析</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root { 
+            --primary-color: #a64d4d; 
+            --bg-color: #fdf5f5; 
+            --border-color: #e2b4b4; 
+            --manage-primary: #3a7ebf; 
+        }
+        body { background-color: var(--bg-color); font-family: "Microsoft JhengHei", sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        
+        /* 登入畫面覆蓋層 */
+        #authOverlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(253, 245, 245, 0.98); display: flex; justify-content: center; align-items: center; z-index: 1000; flex-direction: column; }
+        .auth-box { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 100%; max-width: 350px; text-align: center; border: 2px solid var(--border-color); }
+        .auth-box input { margin-bottom: 15px; width: 100%; padding: 10px; border: 1.5px solid #ebdada; border-radius: 8px; box-sizing: border-box; font-size: 14px;}
+        .auth-box button { margin-bottom: 10px; width: 100%; padding: 12px; border-radius: 10px; border: none; font-weight: bold; cursor: pointer; transition: 0.2s;}
+        .auth-box button:hover { opacity: 0.9; }
+
+        /* 頂部導航列 */
+        .top-nav { background: white; padding: 15px 25px; border-bottom: 2px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+        .nav-left { display: flex; align-items: center; gap: 20px; }
+        .nav-title { margin: 0; color: var(--primary-color); font-size: 20px; font-weight: bold; }
+        
+        .nav-right { display: flex; align-items: center; gap: 15px; }
+        .current-account { font-size: 14px; color: var(--manage-primary); font-weight: bold; background: #f0f7ff; padding: 8px 15px; border-radius: 8px; border: 1px solid #bcd4e6; }
+        .logout-btn { background: #888; color: white; border: none; padding: 8px 15px; border-radius: 6px; cursor: pointer; transition: 0.2s; font-weight: bold;}
+        .logout-btn:hover { background: #666; }
+        
+        /* 圖表區域 */
+        .chart-container { flex: 1; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #fff; margin: 20px; border-radius: 15px; box-shadow: 0 5px 15px rgba(0,0,0,0.05); border: 1px solid #eee; overflow: hidden; }
+        #dataChart { width: 100%; height: 100%; max-height: 700px; }
+        
+        .empty-msg { color: #888; font-size: 18px; margin-top: 50px; display: none; text-align: center; line-height: 1.5; }
+    </style>
+</head>
+<body>
+
+<div id="authOverlay">
+    <div class="auth-box">
+        <h2 style="color: var(--primary-color); margin-top: 0;">📊 營養數據分析中心</h2>
+        <input type="email" id="authEmail" placeholder="電子郵件">
+        <input type="password" id="authPassword" placeholder="密碼">
+        <button style="background: var(--manage-primary); color: white;" onclick="handleLogin()">登入查看數據</button>
+        <div id="authMsg" style="color: red; font-size: 12px; margin-top: 10px;"></div>
+    </div>
+</div>
+
+<div class="top-nav" id="topNav" style="display: none;">
+    <div class="nav-left">
+        <h1 class="nav-title">📊 個人數據圖表分析</h1>
+    </div>
+    <div class="nav-right">
+        <span class="current-account" id="userEmailDisplay"></span>
+        <button class="logout-btn" onclick="handleLogout()">登出</button>
+    </div>
+</div>
+
+<div class="chart-container" id="chartArea" style="display: none;">
+    <canvas id="dataChart"></canvas>
+    <div id="emptyMsg" class="empty-msg"></div>
+</div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.10.0/firebase-app.js";
+    import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.10.0/firebase-auth.js";
+    import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.10.0/firebase-firestore.js";
+
+    // ⚠️ 貼上你從 Firebase Console 取得的金鑰設定 ⚠️
+    const firebaseConfig = {
+        apiKey: "AIzaSyA5bjn998Uv2WAqG8hrVxC3ttuBYQMgnlU",
+        authDomain: "get-fit-8b5f5.firebaseapp.com",
+        projectId: "get-fit-8b5f5",
+        storageBucket: "get-fit-8b5f5.firebasestorage.app",
+        messagingSenderId: "683811288810",
+        appId: "1:683811288810:web:d807bcbd49add92c6fc993"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    let currentUserUID = null;
+    let myChart = null; 
+    let currentMonthData = null;
+    let currentTargets = { tdee: 0, pro: 0 };
+
+    // --- 登入與權限檢查 ---
+    onAuthStateChanged(auth, async (user) => {
+        if (user) {
+            currentUserUID = user.uid;
+            document.getElementById('authOverlay').style.display = 'none';
+            document.getElementById('topNav').style.display = 'flex';
+            document.getElementById('chartArea').style.display = 'flex';
+            document.getElementById('userEmailDisplay').innerText = `👤 ${user.email}`;
+            
+            await loadUserData(); // 登入後載入該使用者的資料
+        } else {
+            currentUserUID = null;
+            document.getElementById('authOverlay').style.display = 'flex';
+            document.getElementById('topNav').style.display = 'none';
+            document.getElementById('chartArea').style.display = 'none';
+        }
+    });
+
+    window.handleLogin = async () => {
+        const e = document.getElementById('authEmail').value;
+        const p = document.getElementById('authPassword').value;
+        try { await signInWithEmailAndPassword(auth, e, p); } 
+        catch (error) { document.getElementById('authMsg').innerText = "登入失敗：" + error.message; }
+    };
+
+    window.handleLogout = () => signOut(auth);
+
+    // --- 讀取當前登入使用者的數據 ---
+    async function loadUserData() {
+        if (!currentUserUID) return;
+        
+        try {
+            const docSnap = await getDoc(doc(db, "users", currentUserUID));
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                currentMonthData = data.monthData || {};
+                currentTargets = data.targets || { tdee: 0, pro: 0 };
+            } else {
+                currentMonthData = {};
+                currentTargets = { tdee: 0, pro: 0 };
+            }
+            processAndRenderChart();
+        } catch(error) {
+            console.error("讀取資料失敗", error);
+            alert("讀取資料失敗，請確認您的網路連線。");
+        }
+    }
+
+    // --- 處理資料與繪製圖表邏輯 ---
+    function processAndRenderChart() {
+        const emptyMsg = document.getElementById('emptyMsg');
+        const canvas = document.getElementById('dataChart');
+
+        // 檢查目標是否設定
+        if (!currentTargets.tdee || !currentTargets.pro) {
+            canvas.style.display = 'none';
+            emptyMsg.style.display = 'block';
+            emptyMsg.innerHTML = '您尚未設定 TDEE 或 蛋白質目標，無法計算達成率。<br>請先至「月曆分頁」設定您的個人目標。';
+            if (myChart) myChart.destroy();
+            return;
+        }
+
+        if (!currentMonthData || Object.keys(currentMonthData).length === 0) {
+            canvas.style.display = 'none';
+            emptyMsg.style.display = 'block';
+            emptyMsg.innerHTML = '您目前沒有足夠的日誌資料可供分析。';
+            if (myChart) myChart.destroy();
+            return;
+        }
+
+        // 將日期排序 (從舊到新)
+        const dates = Object.keys(currentMonthData).sort((a, b) => {
+            const [y1, m1, d1] = a.split('-').map(Number);
+            const [y2, m2, d2] = b.split('-').map(Number);
+            return new Date(y1, m1, d1) - new Date(y2, m2, d2);
+        });
+
+        canvas.style.display = 'block';
+        emptyMsg.style.display = 'none';
+
+        const labels = [];
+        const calPercentData = [];
+        const proPercentData = [];
+        const weightData = [];
+
+        dates.forEach(dateStr => {
+            const currentDayData = currentMonthData[dateStr];
+            
+            // 只要當天有熱量或蛋白質紀錄就視為有效數據
+            if ((currentDayData.cal && currentDayData.cal > 0) || (currentDayData.pro && currentDayData.pro > 0)) {
+                const [y, m, d] = dateStr.split('-').map(Number);
+                labels.push(`${m + 1}/${d}`); 
+                
+                // 計算百分比 (四捨五入到整數)
+                const calP = currentTargets.tdee > 0 ? Math.round((currentDayData.cal / currentTargets.tdee) * 100) : 0;
+                const proP = currentTargets.pro > 0 ? Math.round((currentDayData.pro / currentTargets.pro) * 100) : 0;
+                
+                calPercentData.push(calP);
+                proPercentData.push(proP);
+
+                // 計算隔天的日期
+                const nextDayObj = new Date(y, m, d + 1);
+                const nextDayStr = `${nextDayObj.getFullYear()}-${nextDayObj.getMonth()}-${nextDayObj.getDate()}`;
+                
+                const nextDayData = currentMonthData[nextDayStr];
+                weightData.push((nextDayData && nextDayData.weight > 0) ? nextDayData.weight : null);
+            }
+        });
+
+        // 計算體重的動態 Min / Max (依據您要求的: 最低體重-0.1, 最高體重+0.1)
+        const validWeights = weightData.filter(w => w !== null);
+        let dynamicMinWeight = 50;
+        let dynamicMaxWeight = 100;
+
+        if (validWeights.length > 0) {
+            dynamicMinWeight = Math.min(...validWeights) - 0.1;
+            dynamicMaxWeight = Math.max(...validWeights) + 0.1;
+        }
+
+        renderChart(labels, calPercentData, proPercentData, weightData, dynamicMinWeight, dynamicMaxWeight);
+    }
+
+    function renderChart(labels, calData, proData, weightData, autoMinWeight, autoMaxWeight) {
+        const ctx = document.getElementById('dataChart').getContext('2d');
+        
+        if (myChart) {
+            myChart.destroy();
+        }
+
+        // 建立客製化 Plugin (用於畫紅線與 Emoji)
+        const customAnnotationsPlugin = {
+            id: 'customAnnotations',
+            // 畫 100% 紅線 (在資料繪製前)
+            beforeDraw: (chart) => {
+                const ctx = chart.ctx;
+                const yAxis = chart.scales['y-percent'];
+                if (!yAxis) return;
+                const xAxis = chart.scales.x;
+                const y100 = yAxis.getPixelForValue(100);
+
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(xAxis.left, y100);
+                ctx.lineTo(xAxis.right, y100);
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = 'rgba(231, 76, 60, 0.8)'; // 紅色
+                ctx.setLineDash([5, 5]); // 虛線風格
+                ctx.stroke();
+                ctx.restore();
+            },
+            // 畫 ⚠️ 與 💪 Emoji (在直條圖繪製後)
+            afterDatasetsDraw: (chart) => {
+                const ctx = chart.ctx;
+                ctx.font = '18px "Segoe UI Emoji", "Apple Color Emoji", Arial, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+
+                chart.data.datasets.forEach((dataset, i) => {
+                    const meta = chart.getDatasetMeta(i);
+                    if (meta.hidden) return;
+                    
+                    dataset.data.forEach((val, index) => {
+                        if (val === null) return;
+                        const element = meta.data[index];
+                        const x = element.x;
+                        const y = element.y;
+                        
+                        // i === 0 是熱量，i === 1 是蛋白質
+                        if (i === 0 && val > 100) {
+                            ctx.fillText('⚠️', x, y - 5);
+                        } else if (i === 1 && val > 120) {
+                            ctx.fillText('💪', x, y - 5);
+                        }
+                    });
+                });
+            }
+        };
+
+        myChart = new Chart(ctx, {
+            type: 'bar', 
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: '熱量達成率 (%)',
+                        data: calData,
+                        backgroundColor: 'rgba(230, 126, 34, 0.7)', 
+                        borderColor: 'rgba(230, 126, 34, 1)',
+                        borderWidth: 1,
+                        yAxisID: 'y-percent',
+                        order: 2 
+                    },
+                    {
+                        label: '蛋白質達成率 (%)',
+                        data: proData,
+                        backgroundColor: 'rgba(46, 204, 113, 0.7)', 
+                        borderColor: 'rgba(46, 204, 113, 1)',
+                        borderWidth: 1,
+                        yAxisID: 'y-percent',
+                        order: 3
+                    },
+                    {
+                        label: '隔日早晨體重 (kg)',
+                        type: 'line', 
+                        data: weightData,
+                        backgroundColor: '#3498db', 
+                        borderColor: '#3498db',
+                        borderWidth: 3,
+                        pointBackgroundColor: '#fff',
+                        pointBorderColor: '#3498db',
+                        pointBorderWidth: 2,
+                        pointRadius: 5,
+                        pointHoverRadius: 7,
+                        spanGaps: true, 
+                        yAxisID: 'y-weight',
+                        order: 1 
+                    }
+                ]
+            },
+            plugins: [customAnnotationsPlugin], // 將剛才寫好的 Plugin 載入
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
+                plugins: {
+                    title: {
+                        display: true,
+                        text: '飲食目標達成率 (%) 與 體重趨勢分析',
+                        font: { size: 16 }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(0,0,0,0.8)',
+                        padding: 10,
+                        titleFont: { size: 14 },
+                        bodyFont: { size: 13 },
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) label += ': ';
+                                if (context.dataset.yAxisID === 'y-percent') {
+                                    label += context.parsed.y + '%';
+                                } else {
+                                    label += context.parsed.y + ' kg';
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { display: false }
+                    },
+                    'y-percent': {
+                        type: 'linear',
+                        position: 'left',
+                        title: { display: true, text: '目標達成率 (%)', font: { weight: 'bold' } },
+                        min: 0,
+                        suggestedMax: 130 // 留點上方空間給 Emoji
+                    },
+                    'y-weight': {
+                        type: 'linear',
+                        position: 'right',
+                        title: { display: true, text: '體重 (kg)', font: { weight: 'bold' }, color: '#3498db' },
+                        grid: { drawOnChartArea: false },
+                        min: autoMinWeight,
+                        max: autoMaxWeight
+                    }
+                }
+            }
+        });
+    }
+</script>
+</body>
+</html>
