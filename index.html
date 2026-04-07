@@ -89,6 +89,19 @@
     let currentMonthData = null;
     let currentTargets = { tdee: 0, pro: 0 };
 
+    // --- 全域事件：點擊圖表以外的地方隱藏 Tooltip ---
+    function hideTooltipOnOutsideClick(event) {
+        const canvas = document.getElementById('dataChart');
+        if (myChart && event.target !== canvas) {
+            myChart.setActiveElements([]); // 取消選中狀態
+            myChart.tooltip.setActiveElements([], { x: 0, y: 0 }); // 隱藏資訊框
+            myChart.update();
+        }
+    }
+    // 監聽點擊與手機觸控事件
+    document.addEventListener('click', hideTooltipOnOutsideClick);
+    document.addEventListener('touchstart', hideTooltipOnOutsideClick);
+
     // --- 登入與權限檢查 ---
     onAuthStateChanged(auth, async (user) => {
         if (user) {
@@ -172,6 +185,8 @@
         const labels = [];
         const calPercentData = [];
         const proPercentData = [];
+        const rawCalData = []; // 用於儲存確切熱量
+        const rawProData = []; // 用於儲存確切蛋白質
         const weightData = [];
 
         dates.forEach(dateStr => {
@@ -182,7 +197,11 @@
                 const [y, m, d] = dateStr.split('-').map(Number);
                 labels.push(`${m + 1}/${d}`); 
                 
-                // 計算百分比 (四捨五入到整數)
+                // 紀錄原始數據，供 Tooltip 使用
+                rawCalData.push(currentDayData.cal || 0);
+                rawProData.push(currentDayData.pro || 0);
+
+                // 計算百分比 (四捨五入到整數) 用於圖表高度繪製
                 const calP = currentTargets.tdee > 0 ? Math.round((currentDayData.cal / currentTargets.tdee) * 100) : 0;
                 const proP = currentTargets.pro > 0 ? Math.round((currentDayData.pro / currentTargets.pro) * 100) : 0;
                 
@@ -198,7 +217,7 @@
             }
         });
 
-        // 計算體重的動態 Min / Max (依據您要求的: 最低體重-0.1, 最高體重+0.1)
+        // 計算體重的動態 Min / Max (最低體重-0.1, 最高體重+0.1)
         const validWeights = weightData.filter(w => w !== null);
         let dynamicMinWeight = 50;
         let dynamicMaxWeight = 100;
@@ -208,10 +227,10 @@
             dynamicMaxWeight = Math.max(...validWeights) + 0.1;
         }
 
-        renderChart(labels, calPercentData, proPercentData, weightData, dynamicMinWeight, dynamicMaxWeight);
+        renderChart(labels, calPercentData, proPercentData, rawCalData, rawProData, weightData, dynamicMinWeight, dynamicMaxWeight);
     }
 
-    function renderChart(labels, calData, proData, weightData, autoMinWeight, autoMaxWeight) {
+    function renderChart(labels, calData, proData, rawCalData, rawProData, weightData, autoMinWeight, autoMaxWeight) {
         const ctx = document.getElementById('dataChart').getContext('2d');
         
         if (myChart) {
@@ -234,8 +253,8 @@
                 ctx.moveTo(xAxis.left, y100);
                 ctx.lineTo(xAxis.right, y100);
                 ctx.lineWidth = 2;
-                ctx.strokeStyle = 'rgba(231, 76, 60, 0.8)'; // 紅色
-                ctx.setLineDash([5, 5]); // 虛線風格
+                ctx.strokeStyle = 'rgba(231, 76, 60, 0.8)'; // 紅色虛線
+                ctx.setLineDash([5, 5]); 
                 ctx.stroke();
                 ctx.restore();
             },
@@ -256,11 +275,13 @@
                         const x = element.x;
                         const y = element.y;
                         
-                        // i === 0 是熱量，i === 1 是蛋白質
+                        // i === 0 是熱量，超過 100% 顯示警告
                         if (i === 0 && val > 100) {
                             ctx.fillText('⚠️', x, y - 5);
-                        } else if (i === 1 && val > 120) {
-                            ctx.fillText('💪', x, y - 5);
+                        } 
+                        // i === 1 是蛋白質，超過 120% 顯示肌肉
+                        else if (i === 1 && val < 100) {
+                            ctx.fillText('🍗', x, y - 5);
                         }
                     });
                 });
@@ -273,8 +294,9 @@
                 labels: labels,
                 datasets: [
                     {
-                        label: '熱量達成率 (%)',
+                        label: '熱量', // 修改圖例標籤，讓 Tooltip 乾淨
                         data: calData,
+                        rawValues: rawCalData, // 綁定確切原始資料
                         backgroundColor: 'rgba(230, 126, 34, 0.7)', 
                         borderColor: 'rgba(230, 126, 34, 1)',
                         borderWidth: 1,
@@ -282,8 +304,9 @@
                         order: 2 
                     },
                     {
-                        label: '蛋白質達成率 (%)',
+                        label: '蛋白質',
                         data: proData,
+                        rawValues: rawProData, // 綁定確切原始資料
                         backgroundColor: 'rgba(46, 204, 113, 0.7)', 
                         borderColor: 'rgba(46, 204, 113, 1)',
                         borderWidth: 1,
@@ -291,7 +314,7 @@
                         order: 3
                     },
                     {
-                        label: '隔日早晨體重 (kg)',
+                        label: '隔日早晨體重',
                         type: 'line', 
                         data: weightData,
                         backgroundColor: '#3498db', 
@@ -308,7 +331,7 @@
                     }
                 ]
             },
-            plugins: [customAnnotationsPlugin], // 將剛才寫好的 Plugin 載入
+            plugins: [customAnnotationsPlugin], 
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
@@ -328,15 +351,18 @@
                         titleFont: { size: 14 },
                         bodyFont: { size: 13 },
                         callbacks: {
+                            // 覆寫 Tooltip 的顯示邏輯，不再顯示 Y 軸的百分比
                             label: function(context) {
-                                let label = context.dataset.label || '';
-                                if (label) label += ': ';
-                                if (context.dataset.yAxisID === 'y-percent') {
-                                    label += context.parsed.y + '%';
+                                if (context.datasetIndex === 0) {
+                                    // 顯示熱量的確切數值
+                                    return `🔥 熱量: ${context.dataset.rawValues[context.dataIndex]} kcal`;
+                                } else if (context.datasetIndex === 1) {
+                                    // 顯示蛋白質的確切數值
+                                    return `🍗 蛋白質: ${context.dataset.rawValues[context.dataIndex]} g`;
                                 } else {
-                                    label += context.parsed.y + ' kg';
+                                    // 顯示體重
+                                    return `⚖️ 隔日早晨體重: ${context.parsed.y} kg`;
                                 }
-                                return label;
                             }
                         }
                     }
