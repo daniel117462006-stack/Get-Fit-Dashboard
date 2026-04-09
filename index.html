@@ -31,11 +31,26 @@
         .logout-btn { background: #888; color: white; border: none; padding: 8px 15px; border-radius: 6px; cursor: pointer; transition: 0.2s; font-weight: bold;}
         .logout-btn:hover { background: #666; }
         
+        /* 日期區間控制面板 */
+        .control-panel { background: white; padding: 12px 25px; border-bottom: 1px solid #eee; display: flex; gap: 15px; flex-wrap: wrap; justify-content: center; align-items: center; box-shadow: 0 2px 5px rgba(0,0,0,0.02); }
+        .filter-group { display: flex; align-items: center; gap: 8px; background: #fdfdfd; padding: 8px 12px; border-radius: 8px; border: 1px solid #e2e8f0; }
+        .filter-group label { font-size: 13px; color: #64748b; font-weight: bold; }
+        .filter-group input[type="date"] { padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; font-family: inherit; color: #334155; outline: none; cursor: pointer; }
+
         /* 圖表區域 */
         .chart-container { flex: 1; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #fff; margin: 20px; border-radius: 15px; box-shadow: 0 5px 15px rgba(0,0,0,0.05); border: 1px solid #eee; overflow: hidden; }
         #dataChart { width: 100%; height: 100%; max-height: 700px; }
         
         .empty-msg { color: #888; font-size: 18px; margin-top: 50px; display: none; text-align: center; line-height: 1.5; }
+        
+        /* 手機版排版調整 */
+        @media (max-width: 600px) {
+            .nav-title { font-size: 16px; }
+            .current-account { display: none; } 
+            .control-panel { flex-direction: column; gap: 10px; align-items: stretch; }
+            .filter-group { justify-content: space-between; }
+            .chart-container { margin: 10px; padding: 10px; border-radius: 10px; }
+        }
     </style>
 </head>
 <body>
@@ -57,6 +72,17 @@
     <div class="nav-right">
         <span class="current-account" id="userEmailDisplay"></span>
         <button class="logout-btn" onclick="handleLogout()">登出</button>
+    </div>
+</div>
+
+<div class="control-panel" id="dateFilterPanel" style="display: none;">
+    <div class="filter-group">
+        <label>📅 開始日期</label>
+        <input type="date" id="startDate" onchange="applyDateFilter()">
+    </div>
+    <div class="filter-group">
+        <label>至</label>
+        <input type="date" id="endDate" onchange="applyDateFilter()">
     </div>
 </div>
 
@@ -93,12 +119,11 @@
     function hideTooltipOnOutsideClick(event) {
         const canvas = document.getElementById('dataChart');
         if (myChart && event.target !== canvas) {
-            myChart.setActiveElements([]); // 取消選中狀態
-            myChart.tooltip.setActiveElements([], { x: 0, y: 0 }); // 隱藏資訊框
+            myChart.setActiveElements([]); 
+            myChart.tooltip.setActiveElements([], { x: 0, y: 0 }); 
             myChart.update();
         }
     }
-    // 監聽點擊與手機觸控事件
     document.addEventListener('click', hideTooltipOnOutsideClick);
     document.addEventListener('touchstart', hideTooltipOnOutsideClick);
 
@@ -108,14 +133,16 @@
             currentUserUID = user.uid;
             document.getElementById('authOverlay').style.display = 'none';
             document.getElementById('topNav').style.display = 'flex';
+            document.getElementById('dateFilterPanel').style.display = 'flex';
             document.getElementById('chartArea').style.display = 'flex';
             document.getElementById('userEmailDisplay').innerText = `👤 ${user.email}`;
             
-            await loadUserData(); // 登入後載入該使用者的資料
+            await loadUserData(); 
         } else {
             currentUserUID = null;
             document.getElementById('authOverlay').style.display = 'flex';
             document.getElementById('topNav').style.display = 'none';
+            document.getElementById('dateFilterPanel').style.display = 'none';
             document.getElementById('chartArea').style.display = 'none';
         }
     });
@@ -128,6 +155,14 @@
     };
 
     window.handleLogout = () => signOut(auth);
+
+    // 格式化日期為 YYYY-MM-DD 供 <input type="date"> 使用
+    function formatForDateInput(dateStr) {
+        const [y, m, d] = dateStr.split('-').map(Number);
+        const month = String(m + 1).padStart(2, '0');
+        const day = String(d).padStart(2, '0');
+        return `${y}-${month}-${day}`;
+    }
 
     // --- 讀取當前登入使用者的數據 ---
     async function loadUserData() {
@@ -143,6 +178,20 @@
                 currentMonthData = {};
                 currentTargets = { tdee: 0, pro: 0 };
             }
+
+            // 初始化時設定預設顯示「最新 15 天」
+            const allDates = Object.keys(currentMonthData).sort((a, b) => {
+                const [y1, m1, d1] = a.split('-').map(Number);
+                const [y2, m2, d2] = b.split('-').map(Number);
+                return new Date(y1, m1, d1) - new Date(y2, m2, d2);
+            });
+
+            if (allDates.length > 0) {
+                const recentDates = allDates.slice(-15);
+                document.getElementById('startDate').value = formatForDateInput(recentDates[0]);
+                document.getElementById('endDate').value = formatForDateInput(recentDates[recentDates.length - 1]);
+            }
+
             processAndRenderChart();
         } catch(error) {
             console.error("讀取資料失敗", error);
@@ -150,12 +199,16 @@
         }
     }
 
+    // 將事件綁定直接呼叫圖表重繪
+    window.applyDateFilter = () => {
+        processAndRenderChart();
+    };
+
     // --- 處理資料與繪製圖表邏輯 ---
     function processAndRenderChart() {
         const emptyMsg = document.getElementById('emptyMsg');
         const canvas = document.getElementById('dataChart');
 
-        // 檢查目標是否設定
         if (!currentTargets.tdee || !currentTargets.pro) {
             canvas.style.display = 'none';
             emptyMsg.style.display = 'block';
@@ -172,12 +225,42 @@
             return;
         }
 
-        // 將日期排序 (從舊到新)
-        const dates = Object.keys(currentMonthData).sort((a, b) => {
+        // 讀取日期區間篩選值
+        const startVal = document.getElementById('startDate').value;
+        const endVal = document.getElementById('endDate').value;
+        let startObj = null, endObj = null;
+        
+        if (startVal) {
+            const [y, m, d] = startVal.split('-').map(Number);
+            startObj = new Date(y, m - 1, d); // input 是 1-indexed
+        }
+        if (endVal) {
+            const [y, m, d] = endVal.split('-').map(Number);
+            endObj = new Date(y, m - 1, d);
+        }
+
+        // 將日期排序並過濾
+        let dates = Object.keys(currentMonthData).sort((a, b) => {
             const [y1, m1, d1] = a.split('-').map(Number);
             const [y2, m2, d2] = b.split('-').map(Number);
             return new Date(y1, m1, d1) - new Date(y2, m2, d2);
         });
+
+        dates = dates.filter(dateStr => {
+            const [y, m, d] = dateStr.split('-').map(Number);
+            const current = new Date(y, m, d); // db 的月份是 0-indexed
+            if (startObj && current < startObj) return false;
+            if (endObj && current > endObj) return false;
+            return true;
+        });
+
+        if (dates.length === 0) {
+            canvas.style.display = 'none';
+            emptyMsg.style.display = 'block';
+            emptyMsg.innerHTML = '您選擇的日期區間內沒有任何資料。';
+            if (myChart) myChart.destroy();
+            return;
+        }
 
         canvas.style.display = 'block';
         emptyMsg.style.display = 'none';
@@ -185,8 +268,8 @@
         const labels = [];
         const calPercentData = [];
         const proPercentData = [];
-        const rawCalData = []; // 用於儲存確切熱量
-        const rawProData = []; // 用於儲存確切蛋白質
+        const rawCalData = []; 
+        const rawProData = []; 
         const weightData = [];
 
         dates.forEach(dateStr => {
@@ -197,18 +280,15 @@
                 const [y, m, d] = dateStr.split('-').map(Number);
                 labels.push(`${m + 1}/${d}`); 
                 
-                // 紀錄原始數據，供 Tooltip 使用
                 rawCalData.push(currentDayData.cal || 0);
                 rawProData.push(currentDayData.pro || 0);
 
-                // 計算百分比 (四捨五入到整數) 用於圖表高度繪製
                 const calP = currentTargets.tdee > 0 ? Math.round((currentDayData.cal / currentTargets.tdee) * 100) : 0;
                 const proP = currentTargets.pro > 0 ? Math.round((currentDayData.pro / currentTargets.pro) * 100) : 0;
                 
                 calPercentData.push(calP);
                 proPercentData.push(proP);
 
-                // 計算隔天的日期
                 const nextDayObj = new Date(y, m, d + 1);
                 const nextDayStr = `${nextDayObj.getFullYear()}-${nextDayObj.getMonth()}-${nextDayObj.getDate()}`;
                 
@@ -217,7 +297,6 @@
             }
         });
 
-        // 計算體重的動態 Min / Max (最低體重-0.1, 最高體重+0.1)
         const validWeights = weightData.filter(w => w !== null);
         let dynamicMinWeight = 50;
         let dynamicMaxWeight = 100;
@@ -237,10 +316,8 @@
             myChart.destroy();
         }
 
-        // 建立客製化 Plugin (用於畫紅線與 Emoji)
         const customAnnotationsPlugin = {
             id: 'customAnnotations',
-            // 畫 100% 紅線 (在資料繪製前)
             beforeDraw: (chart) => {
                 const ctx = chart.ctx;
                 const yAxis = chart.scales['y-percent'];
@@ -253,12 +330,11 @@
                 ctx.moveTo(xAxis.left, y100);
                 ctx.lineTo(xAxis.right, y100);
                 ctx.lineWidth = 2;
-                ctx.strokeStyle = 'rgba(231, 76, 60, 0.8)'; // 紅色虛線
+                ctx.strokeStyle = 'rgba(231, 76, 60, 0.8)'; 
                 ctx.setLineDash([5, 5]); 
                 ctx.stroke();
                 ctx.restore();
             },
-            // 畫 ⚠️ 與 💪 Emoji (在直條圖繪製後)
             afterDatasetsDraw: (chart) => {
                 const ctx = chart.ctx;
                 ctx.font = '18px "Segoe UI Emoji", "Apple Color Emoji", Arial, sans-serif';
@@ -275,11 +351,9 @@
                         const x = element.x;
                         const y = element.y;
                         
-                        // i === 0 是熱量，超過 100% 顯示警告
                         if (i === 0 && val > 100) {
                             ctx.fillText('⚠️', x, y - 5);
                         } 
-                        // i === 1 是蛋白質，超過 120% 顯示肌肉
                         else if (i === 1 && val < 100) {
                             ctx.fillText('🍗', x, y - 5);
                         }
@@ -294,9 +368,9 @@
                 labels: labels,
                 datasets: [
                     {
-                        label: '熱量', // 修改圖例標籤，讓 Tooltip 乾淨
+                        label: '熱量', 
                         data: calData,
-                        rawValues: rawCalData, // 綁定確切原始資料
+                        rawValues: rawCalData, 
                         backgroundColor: 'rgba(230, 126, 34, 0.7)', 
                         borderColor: 'rgba(230, 126, 34, 1)',
                         borderWidth: 1,
@@ -306,7 +380,7 @@
                     {
                         label: '蛋白質',
                         data: proData,
-                        rawValues: rawProData, // 綁定確切原始資料
+                        rawValues: rawProData, 
                         backgroundColor: 'rgba(46, 204, 113, 0.7)', 
                         borderColor: 'rgba(46, 204, 113, 1)',
                         borderWidth: 1,
@@ -351,16 +425,12 @@
                         titleFont: { size: 14 },
                         bodyFont: { size: 13 },
                         callbacks: {
-                            // 覆寫 Tooltip 的顯示邏輯，不再顯示 Y 軸的百分比
                             label: function(context) {
                                 if (context.datasetIndex === 0) {
-                                    // 顯示熱量的確切數值
                                     return `🔥 熱量: ${context.dataset.rawValues[context.dataIndex]} kcal`;
                                 } else if (context.datasetIndex === 1) {
-                                    // 顯示蛋白質的確切數值
                                     return `🍗 蛋白質: ${context.dataset.rawValues[context.dataIndex]} g`;
                                 } else {
-                                    // 顯示體重
                                     return `⚖️ 隔日早晨體重: ${context.parsed.y} kg`;
                                 }
                             }
@@ -376,7 +446,7 @@
                         position: 'left',
                         title: { display: true, text: '目標達成率 (%)', font: { weight: 'bold' } },
                         min: 0,
-                        suggestedMax: 130 // 留點上方空間給 Emoji
+                        suggestedMax: 130 
                     },
                     'y-weight': {
                         type: 'linear',
