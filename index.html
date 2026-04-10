@@ -37,9 +37,19 @@
         .filter-group label { font-size: 13px; color: #64748b; font-weight: bold; }
         .filter-group input[type="date"] { padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; font-family: inherit; color: #334155; outline: none; cursor: pointer; }
 
+        /* 數據摘要卡片 */
+        .summary-cards { display: flex; gap: 15px; padding: 15px 25px 0 25px; justify-content: center; flex-wrap: wrap; }
+        .summary-card { flex: 1; max-width: 250px; min-width: 160px; background: white; border-radius: 12px; padding: 15px; text-align: center; box-shadow: 0 4px 10px rgba(0,0,0,0.03); border: 1px solid #eee; }
+        .summary-title { font-size: 13px; color: #64748b; font-weight: bold; margin-bottom: 5px; }
+        .summary-value { font-size: 22px; font-weight: bold; }
+        .cal-card .summary-value { color: #d35400; }
+        .pro-card .summary-value { color: #27ae60; }
+        .weight-card .summary-value { color: #2980b9; }
+        .weight-sub { font-size: 11px; color: #94a3b8; font-weight: normal; margin-top: 4px; }
+
         /* 圖表區域 */
-        .chart-container { flex: 1; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #fff; margin: 20px; border-radius: 15px; box-shadow: 0 5px 15px rgba(0,0,0,0.05); border: 1px solid #eee; overflow: hidden; }
-        #dataChart { width: 100%; height: 100%; max-height: 700px; }
+        .chart-container { flex: 1; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #fff; margin: 15px 20px 20px 20px; border-radius: 15px; box-shadow: 0 5px 15px rgba(0,0,0,0.05); border: 1px solid #eee; overflow: hidden; }
+        #dataChart { width: 100%; height: 100%; max-height: 600px; }
         
         .empty-msg { color: #888; font-size: 18px; margin-top: 50px; display: none; text-align: center; line-height: 1.5; }
         
@@ -49,6 +59,9 @@
             .current-account { display: none; } 
             .control-panel { flex-direction: column; gap: 10px; align-items: stretch; }
             .filter-group { justify-content: space-between; }
+            .summary-cards { padding: 15px 10px 0 10px; }
+            .summary-card { padding: 10px; min-width: 100px; }
+            .summary-value { font-size: 18px; }
             .chart-container { margin: 10px; padding: 10px; border-radius: 10px; }
         }
     </style>
@@ -83,6 +96,22 @@
     <div class="filter-group">
         <label>至</label>
         <input type="date" id="endDate" onchange="applyDateFilter()">
+    </div>
+</div>
+
+<div class="summary-cards" id="summaryCards" style="display: none;">
+    <div class="summary-card cal-card">
+        <div class="summary-title">🔥 平均熱量</div>
+        <div class="summary-value" id="avgCal">--</div>
+    </div>
+    <div class="summary-card pro-card">
+        <div class="summary-title">💪 平均蛋白</div>
+        <div class="summary-value" id="avgPro">--</div>
+    </div>
+    <div class="summary-card weight-card">
+        <div class="summary-title">⚖️ 體重變化</div>
+        <div class="summary-value" id="weightChange">--</div>
+        <div class="weight-sub" id="weightDetails">--</div>
     </div>
 </div>
 
@@ -134,6 +163,7 @@
             document.getElementById('authOverlay').style.display = 'none';
             document.getElementById('topNav').style.display = 'flex';
             document.getElementById('dateFilterPanel').style.display = 'flex';
+            document.getElementById('summaryCards').style.display = 'flex';
             document.getElementById('chartArea').style.display = 'flex';
             document.getElementById('userEmailDisplay').innerText = `👤 ${user.email}`;
             
@@ -143,6 +173,7 @@
             document.getElementById('authOverlay').style.display = 'flex';
             document.getElementById('topNav').style.display = 'none';
             document.getElementById('dateFilterPanel').style.display = 'none';
+            document.getElementById('summaryCards').style.display = 'none';
             document.getElementById('chartArea').style.display = 'none';
         }
     });
@@ -156,7 +187,6 @@
 
     window.handleLogout = () => signOut(auth);
 
-    // 格式化日期為 YYYY-MM-DD 供 <input type="date"> 使用
     function formatForDateInput(dateStr) {
         const [y, m, d] = dateStr.split('-').map(Number);
         const month = String(m + 1).padStart(2, '0');
@@ -164,7 +194,6 @@
         return `${y}-${month}-${day}`;
     }
 
-    // --- 讀取當前登入使用者的數據 ---
     async function loadUserData() {
         if (!currentUserUID) return;
         
@@ -179,7 +208,6 @@
                 currentTargets = { tdee: 0, pro: 0 };
             }
 
-            // 初始化時設定預設顯示「最新 15 天」
             const allDates = Object.keys(currentMonthData).sort((a, b) => {
                 const [y1, m1, d1] = a.split('-').map(Number);
                 const [y2, m2, d2] = b.split('-').map(Number);
@@ -199,18 +227,18 @@
         }
     }
 
-    // 將事件綁定直接呼叫圖表重繪
     window.applyDateFilter = () => {
         processAndRenderChart();
     };
 
-    // --- 處理資料與繪製圖表邏輯 ---
     function processAndRenderChart() {
         const emptyMsg = document.getElementById('emptyMsg');
         const canvas = document.getElementById('dataChart');
+        const summaryCards = document.getElementById('summaryCards');
 
         if (!currentTargets.tdee || !currentTargets.pro) {
             canvas.style.display = 'none';
+            summaryCards.style.display = 'none';
             emptyMsg.style.display = 'block';
             emptyMsg.innerHTML = '您尚未設定 TDEE 或 蛋白質目標，無法計算達成率。<br>請先至「月曆分頁」設定您的個人目標。';
             if (myChart) myChart.destroy();
@@ -219,27 +247,26 @@
 
         if (!currentMonthData || Object.keys(currentMonthData).length === 0) {
             canvas.style.display = 'none';
+            summaryCards.style.display = 'none';
             emptyMsg.style.display = 'block';
             emptyMsg.innerHTML = '您目前沒有足夠的日誌資料可供分析。';
             if (myChart) myChart.destroy();
             return;
         }
 
-        // 讀取日期區間篩選值
         const startVal = document.getElementById('startDate').value;
         const endVal = document.getElementById('endDate').value;
         let startObj = null, endObj = null;
         
         if (startVal) {
             const [y, m, d] = startVal.split('-').map(Number);
-            startObj = new Date(y, m - 1, d); // input 是 1-indexed
+            startObj = new Date(y, m - 1, d);
         }
         if (endVal) {
             const [y, m, d] = endVal.split('-').map(Number);
             endObj = new Date(y, m - 1, d);
         }
 
-        // 將日期排序並過濾
         let dates = Object.keys(currentMonthData).sort((a, b) => {
             const [y1, m1, d1] = a.split('-').map(Number);
             const [y2, m2, d2] = b.split('-').map(Number);
@@ -248,7 +275,7 @@
 
         dates = dates.filter(dateStr => {
             const [y, m, d] = dateStr.split('-').map(Number);
-            const current = new Date(y, m, d); // db 的月份是 0-indexed
+            const current = new Date(y, m, d);
             if (startObj && current < startObj) return false;
             if (endObj && current > endObj) return false;
             return true;
@@ -256,6 +283,7 @@
 
         if (dates.length === 0) {
             canvas.style.display = 'none';
+            summaryCards.style.display = 'none';
             emptyMsg.style.display = 'block';
             emptyMsg.innerHTML = '您選擇的日期區間內沒有任何資料。';
             if (myChart) myChart.destroy();
@@ -263,6 +291,7 @@
         }
 
         canvas.style.display = 'block';
+        summaryCards.style.display = 'flex';
         emptyMsg.style.display = 'none';
 
         const labels = [];
@@ -272,19 +301,28 @@
         const rawProData = []; 
         const weightData = [];
 
+        let totalCal = 0;
+        let totalPro = 0;
+        let validDays = 0;
+
         dates.forEach(dateStr => {
             const currentDayData = currentMonthData[dateStr];
             
-            // 只要當天有熱量或蛋白質紀錄就視為有效數據
             if ((currentDayData.cal && currentDayData.cal > 0) || (currentDayData.pro && currentDayData.pro > 0)) {
                 const [y, m, d] = dateStr.split('-').map(Number);
                 labels.push(`${m + 1}/${d}`); 
                 
-                rawCalData.push(currentDayData.cal || 0);
-                rawProData.push(currentDayData.pro || 0);
+                const calVal = currentDayData.cal || 0;
+                const proVal = currentDayData.pro || 0;
+                rawCalData.push(calVal);
+                rawProData.push(proVal);
 
-                const calP = currentTargets.tdee > 0 ? Math.round((currentDayData.cal / currentTargets.tdee) * 100) : 0;
-                const proP = currentTargets.pro > 0 ? Math.round((currentDayData.pro / currentTargets.pro) * 100) : 0;
+                totalCal += calVal;
+                totalPro += proVal;
+                validDays++;
+
+                const calP = currentTargets.tdee > 0 ? Math.round((calVal / currentTargets.tdee) * 100) : 0;
+                const proP = currentTargets.pro > 0 ? Math.round((proVal / currentTargets.pro) * 100) : 0;
                 
                 calPercentData.push(calP);
                 proPercentData.push(proP);
@@ -297,10 +335,43 @@
             }
         });
 
+        // 更新數據摘要卡片
+        if (validDays > 0) {
+            document.getElementById('avgCal').innerText = Math.round(totalCal / validDays) + ' kcal';
+            document.getElementById('avgPro').innerText = Math.round(totalPro / validDays) + ' g';
+        } else {
+            document.getElementById('avgCal').innerText = '--';
+            document.getElementById('avgPro').innerText = '--';
+        }
+
         const validWeights = weightData.filter(w => w !== null);
+        const wChangeEl = document.getElementById('weightChange');
+        const wDetailEl = document.getElementById('weightDetails');
+
+        if (validWeights.length >= 2) {
+            const firstW = validWeights[0];
+            const lastW = validWeights[validWeights.length - 1];
+            const diff = (lastW - firstW).toFixed(1);
+            
+            if (diff > 0) {
+                wChangeEl.innerText = `+${diff} kg`;
+                wChangeEl.style.color = '#e74c3c'; // 上升紅色
+            } else if (diff < 0) {
+                wChangeEl.innerText = `${diff} kg`;
+                wChangeEl.style.color = '#27ae60'; // 下降綠色
+            } else {
+                wChangeEl.innerText = `0 kg`;
+                wChangeEl.style.color = '#2980b9'; // 持平藍色
+            }
+            wDetailEl.innerText = `(首 ${firstW} ➔ 末 ${lastW})`;
+        } else {
+            wChangeEl.innerText = '--';
+            wChangeEl.style.color = '#2980b9';
+            wDetailEl.innerText = '此區間無足夠體重數據';
+        }
+
         let dynamicMinWeight = 50;
         let dynamicMaxWeight = 100;
-
         if (validWeights.length > 0) {
             dynamicMinWeight = Math.min(...validWeights) - 0.1;
             dynamicMaxWeight = Math.max(...validWeights) + 0.1;
